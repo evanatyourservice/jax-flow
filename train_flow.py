@@ -418,7 +418,6 @@ def main(_):
 
         tx = kron(
             learning_rate=lr_schedule,
-            b1=FLAGS.model["beta1"],
             weight_decay=FLAGS.model["weight_decay"],
             preconditioner_update_probability=precond_update_prob_schedule(
                 flat_start=1000, min_prob=0.05
@@ -427,11 +426,7 @@ def main(_):
         )
     elif FLAGS.model["optimizer"] == "soap":
         tx = optax.chain(
-            scale_by_soap(
-                b1=FLAGS.model["beta1"],
-                b2=FLAGS.model["beta2"],
-                precondition_frequency=20,
-            ),
+            scale_by_soap(precondition_frequency=20),
             # exploding gradients so clipping updates like kron instead of grad clipping
             optax.clip_by_block_rms(1.1),
             optax.add_decayed_weights(FLAGS.model["weight_decay"]),
