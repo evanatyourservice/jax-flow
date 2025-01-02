@@ -25,15 +25,23 @@ Dtype = Any
 ######## FID Utilities.
 #######################################
 
-def get_fid_network():
-    # Returns a function with input of images in range [-1, 1], and output of 2048-length activations.
-    model = InceptionV3(pretrained=True)
+
+def get_fid_network(transform_input=True):
+    """
+    Returns a function with input of images in range [-1, 1], and output of 2048-length activations.
+
+    Args:
+        transform_input (bool): If True, preprocesses the input according to the method with which it
+                                was trained on ImageNet.
+    """
+    model = InceptionV3(pretrained=True, transform_input=transform_input)
     rng = jax.random.PRNGKey(0)
-    params = model.init(rng, jnp.ones((1, 256, 256, 3)))
+    params = model.init(rng, jnp.ones((1, 299, 299, 3)))
     params = flax.jax_utils.replicate(params, devices=jax.local_devices())
     apply_fn = jax.pmap(functools.partial(model.apply, train=False))
     apply_fn = functools.partial(apply_fn, params)
     return apply_fn
+
 
 def fid_from_stats(mu1, sigma1, mu2, sigma2):
     diff = mu1 - mu2
@@ -43,35 +51,37 @@ def fid_from_stats(mu1, sigma1, mu2, sigma2):
     fid = diff @ diff + jnp.trace(sigma1 + sigma2 - 2 * covmean)
     return fid
 
+
 #######################################
 ######## Inception V3 Model.
 ######## https://github.com/matthias-wright/jax-fid/blob/main/jax_fid/inception.py
 #######################################
 
-def download(url, ckpt_dir='data'):
-    name = url[url.rfind('/') + 1 : url.rfind('?')]
+
+def download(url, ckpt_dir="data"):
+    name = url[url.rfind("/") + 1 : url.rfind("?")]
     if ckpt_dir is None:
         ckpt_dir = tempfile.gettempdir()
     ckpt_file = os.path.join(ckpt_dir, name)
     if not os.path.exists(ckpt_file):
-        print(f'Downloading: \"{url[:url.rfind("?")]}\" to {ckpt_file}')
-        if not os.path.exists(ckpt_dir): 
+        print(f'Downloading: "{url[:url.rfind("?")]}" to {ckpt_file}')
+        if not os.path.exists(ckpt_dir):
             os.makedirs(ckpt_dir)
 
         response = requests.get(url, stream=True)
-        total_size_in_bytes = int(response.headers.get('content-length', 0))
-        progress_bar = tqdm(total=total_size_in_bytes, unit='iB', unit_scale=True)
-        
+        total_size_in_bytes = int(response.headers.get("content-length", 0))
+        progress_bar = tqdm(total=total_size_in_bytes, unit="iB", unit_scale=True)
+
         # first create temp file, in case the download fails
-        ckpt_file_temp = os.path.join(ckpt_dir, name + '.temp')
-        with open(ckpt_file_temp, 'wb') as file:
+        ckpt_file_temp = os.path.join(ckpt_dir, name + ".temp")
+        with open(ckpt_file_temp, "wb") as file:
             for data in response.iter_content(chunk_size=1024):
                 progress_bar.update(len(data))
                 file.write(data)
         progress_bar.close()
-        
+
         if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
-            print('An error occured while downloading, please try again.')
+            print("An error occured while downloading, please try again.")
             if os.path.exists(ckpt_file_temp):
                 os.remove(ckpt_file_temp)
         else:
@@ -85,6 +95,7 @@ def get(dictionary, key):
         return None
     return dictionary[key]
 
+
 class InceptionV3(nn.Module):
     """
     InceptionV3 network.
@@ -94,24 +105,27 @@ class InceptionV3(nn.Module):
     Attributes:
         include_head (bool): If True, include classifier head.
         num_classes (int): Number of classes.
-        pretrained (bool): If True, use pretrained weights. 
+        pretrained (bool): If True, use pretrained weights.
         transform_input (bool): If True, preprocesses the input according to the method with which it
                                 was trained on ImageNet.
         aux_logits (bool): If True, add an auxiliary branch that can improve training.
         dtype (str): Data type.
     """
-    include_head: bool=False
-    num_classes: int=1000
-    pretrained: bool=False
-    transform_input: bool=False
-    aux_logits: bool=False
-    ckpt_path: str='https://www.dropbox.com/s/xt6zvlvt22dcwck/inception_v3_weights_fid.pickle?dl=1'
-    dtype: str='float32'
+
+    include_head: bool = False
+    num_classes: int = 1000
+    pretrained: bool = False
+    transform_input: bool = False
+    aux_logits: bool = False
+    ckpt_path: str = (
+        "https://www.dropbox.com/s/xt6zvlvt22dcwck/inception_v3_weights_fid.pickle?dl=1"
+    )
+    dtype: str = "float32"
 
     def setup(self):
         if self.pretrained:
             ckpt_file = download(self.ckpt_path)
-            self.params_dict = pickle.load(open(ckpt_file, 'rb'))
+            self.params_dict = pickle.load(open(ckpt_file, "rb"))
             self.num_classes_ = 1000
         else:
             self.params_dict = None
@@ -126,214 +140,305 @@ class InceptionV3(nn.Module):
             rng (jax.random.PRNGKey): Random seed.
         """
         x = self._transform_input(x)
-        x = BasicConv2d(out_channels=32,
-                        kernel_size=(3, 3),
-                        strides=(2, 2),
-                        params_dict=get(self.params_dict, 'Conv2d_1a_3x3'),
-                        dtype=self.dtype)(x, train)
-        x = BasicConv2d(out_channels=32,
-                        kernel_size=(3, 3),
-                        params_dict=get(self.params_dict, 'Conv2d_2a_3x3'),
-                        dtype=self.dtype)(x, train)
-        x = BasicConv2d(out_channels=64,
-                        kernel_size=(3, 3),
-                        padding=((1, 1), (1, 1)),
-                        params_dict=get(self.params_dict, 'Conv2d_2b_3x3'),
-                        dtype=self.dtype)(x, train)
+        x = BasicConv2d(
+            out_channels=32,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            params_dict=get(self.params_dict, "Conv2d_1a_3x3"),
+            dtype=self.dtype,
+        )(x, train)
+        x = BasicConv2d(
+            out_channels=32,
+            kernel_size=(3, 3),
+            params_dict=get(self.params_dict, "Conv2d_2a_3x3"),
+            dtype=self.dtype,
+        )(x, train)
+        x = BasicConv2d(
+            out_channels=64,
+            kernel_size=(3, 3),
+            padding=((1, 1), (1, 1)),
+            params_dict=get(self.params_dict, "Conv2d_2b_3x3"),
+            dtype=self.dtype,
+        )(x, train)
         x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2))
-        x = BasicConv2d(out_channels=80,
-                        kernel_size=(1, 1),
-                        params_dict=get(self.params_dict, 'Conv2d_3b_1x1'),
-                        dtype=self.dtype)(x, train)
-        x = BasicConv2d(out_channels=192,
-                        kernel_size=(3, 3),
-                        params_dict=get(self.params_dict, 'Conv2d_4a_3x3'),
-                        dtype=self.dtype)(x, train)
+        x = BasicConv2d(
+            out_channels=80,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "Conv2d_3b_1x1"),
+            dtype=self.dtype,
+        )(x, train)
+        x = BasicConv2d(
+            out_channels=192,
+            kernel_size=(3, 3),
+            params_dict=get(self.params_dict, "Conv2d_4a_3x3"),
+            dtype=self.dtype,
+        )(x, train)
         x = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2))
-        x = InceptionA(pool_features=32,
-                       params_dict=get(self.params_dict, 'Mixed_5b'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionA(pool_features=64,
-                       params_dict=get(self.params_dict, 'Mixed_5c'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionA(pool_features=64,
-                       params_dict=get(self.params_dict, 'Mixed_5d'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionB(params_dict=get(self.params_dict, 'Mixed_6a'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionC(channels_7x7=128,
-                       params_dict=get(self.params_dict, 'Mixed_6b'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionC(channels_7x7=160,
-                       params_dict=get(self.params_dict, 'Mixed_6c'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionC(channels_7x7=160,
-                       params_dict=get(self.params_dict, 'Mixed_6d'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionC(channels_7x7=192,
-                       params_dict=get(self.params_dict, 'Mixed_6e'),
-                       dtype=self.dtype)(x, train)
+        x = InceptionA(
+            pool_features=32,
+            params_dict=get(self.params_dict, "Mixed_5b"),
+            dtype=self.dtype,
+        )(x, train)
+        x = InceptionA(
+            pool_features=64,
+            params_dict=get(self.params_dict, "Mixed_5c"),
+            dtype=self.dtype,
+        )(x, train)
+        x = InceptionA(
+            pool_features=64,
+            params_dict=get(self.params_dict, "Mixed_5d"),
+            dtype=self.dtype,
+        )(x, train)
+        x = InceptionB(params_dict=get(self.params_dict, "Mixed_6a"), dtype=self.dtype)(
+            x, train
+        )
+        x = InceptionC(
+            channels_7x7=128,
+            params_dict=get(self.params_dict, "Mixed_6b"),
+            dtype=self.dtype,
+        )(x, train)
+        x = InceptionC(
+            channels_7x7=160,
+            params_dict=get(self.params_dict, "Mixed_6c"),
+            dtype=self.dtype,
+        )(x, train)
+        x = InceptionC(
+            channels_7x7=160,
+            params_dict=get(self.params_dict, "Mixed_6d"),
+            dtype=self.dtype,
+        )(x, train)
+        x = InceptionC(
+            channels_7x7=192,
+            params_dict=get(self.params_dict, "Mixed_6e"),
+            dtype=self.dtype,
+        )(x, train)
         aux = None
         if self.aux_logits and train:
-            aux = InceptionAux(num_classes=self.num_classes_,
-                               params_dict=get(self.params_dict, 'AuxLogits'),
-                               dtype=self.dtype)(x, train)
-        x = InceptionD(params_dict=get(self.params_dict, 'Mixed_7a'),
-                       dtype=self.dtype)(x, train)
-        x = InceptionE(avg_pool, params_dict=get(self.params_dict, 'Mixed_7b'),
-                       dtype=self.dtype)(x, train)
+            aux = InceptionAux(
+                num_classes=self.num_classes_,
+                params_dict=get(self.params_dict, "AuxLogits"),
+                dtype=self.dtype,
+            )(x, train)
+        x = InceptionD(params_dict=get(self.params_dict, "Mixed_7a"), dtype=self.dtype)(
+            x, train
+        )
+        x = InceptionE(
+            avg_pool, params_dict=get(self.params_dict, "Mixed_7b"), dtype=self.dtype
+        )(x, train)
         # Following the implementation by @mseitzer, we use max pooling instead
         # of average pooling here.
         # See: https://github.com/mseitzer/pytorch-fid/blob/master/src/pytorch_fid/inception.py#L320
-        x = InceptionE(nn.max_pool, params_dict=get(self.params_dict, 'Mixed_7c'),
-                       dtype=self.dtype)(x, train)
+        x = InceptionE(
+            nn.max_pool, params_dict=get(self.params_dict, "Mixed_7c"), dtype=self.dtype
+        )(x, train)
         x = jnp.mean(x, axis=(1, 2), keepdims=True)
         if not self.include_head:
             return x
         x = nn.Dropout(rate=0.5)(x, deterministic=not train, rng=rng)
         x = jnp.reshape(x, newshape=(x.shape[0], -1))
-        x = Dense(features=self.num_classes_,
-                  params_dict=get(self.params_dict, 'fc'),
-                  dtype=self.dtype)(x)
+        x = Dense(
+            features=self.num_classes_,
+            params_dict=get(self.params_dict, "fc"),
+            dtype=self.dtype,
+        )(x)
         if self.aux_logits:
             return x, aux
         return x
 
     def _transform_input(self, x):
         if self.transform_input:
-            x_ch0 = jnp.expand_dims(x[..., 0], axis=-1) * (0.229 / 0.5) + (0.485 - 0.5) / 0.5
-            x_ch1 = jnp.expand_dims(x[..., 1], axis=-1) * (0.224 / 0.5) + (0.456 - 0.5) / 0.5
-            x_ch2 = jnp.expand_dims(x[..., 2], axis=-1) * (0.225 / 0.5) + (0.406 - 0.5) / 0.5
+            x_ch0 = (
+                jnp.expand_dims(x[..., 0], axis=-1) * (0.229 / 0.5)
+                + (0.485 - 0.5) / 0.5
+            )
+            x_ch1 = (
+                jnp.expand_dims(x[..., 1], axis=-1) * (0.224 / 0.5)
+                + (0.456 - 0.5) / 0.5
+            )
+            x_ch2 = (
+                jnp.expand_dims(x[..., 2], axis=-1) * (0.225 / 0.5)
+                + (0.406 - 0.5) / 0.5
+            )
             x = jnp.concatenate((x_ch0, x_ch1, x_ch2), axis=-1)
         return x
 
 
 class Dense(nn.Module):
     features: int
-    kernel_init: functools.partial=nn.initializers.lecun_normal()
-    bias_init: functools.partial=nn.initializers.zeros
-    params_dict: dict=None
-    dtype: str='float32'
+    kernel_init: functools.partial = nn.initializers.lecun_normal()
+    bias_init: functools.partial = nn.initializers.zeros
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x):
-        x = nn.Dense(features=self.features,
-                     kernel_init=self.kernel_init if self.params_dict is None else lambda *_ : jnp.array(self.params_dict['kernel']),
-                     bias_init=self.bias_init if self.params_dict is None else lambda *_ : jnp.array(self.params_dict['bias']))(x)
+        x = nn.Dense(
+            features=self.features,
+            kernel_init=(
+                self.kernel_init
+                if self.params_dict is None
+                else lambda *_: jnp.array(self.params_dict["kernel"])
+            ),
+            bias_init=(
+                self.bias_init
+                if self.params_dict is None
+                else lambda *_: jnp.array(self.params_dict["bias"])
+            ),
+        )(x)
         return x
 
 
 class BasicConv2d(nn.Module):
     out_channels: int
-    kernel_size: Union[int, Iterable[int]]=(3, 3)
-    strides: Optional[Iterable[int]]=(1, 1)
-    padding: Union[str, Iterable[Tuple[int, int]]]='valid'
-    use_bias: bool=False
-    kernel_init: functools.partial=nn.initializers.lecun_normal()
-    bias_init: functools.partial=nn.initializers.zeros
-    params_dict: dict=None
-    dtype: str='float32'
+    kernel_size: Union[int, Iterable[int]] = (3, 3)
+    strides: Optional[Iterable[int]] = (1, 1)
+    padding: Union[str, Iterable[Tuple[int, int]]] = "valid"
+    use_bias: bool = False
+    kernel_init: functools.partial = nn.initializers.lecun_normal()
+    bias_init: functools.partial = nn.initializers.zeros
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
-        x = nn.Conv(features=self.out_channels,
-                    kernel_size=self.kernel_size,
-                    strides=self.strides,
-                    padding=self.padding,
-                    use_bias=self.use_bias,
-                    kernel_init=self.kernel_init if self.params_dict is None else lambda *_ : jnp.array(self.params_dict['conv']['kernel']),
-                    bias_init=self.bias_init if self.params_dict is None else lambda *_ : jnp.array(self.params_dict['conv']['bias']),
-                    dtype=self.dtype)(x)
+        x = nn.Conv(
+            features=self.out_channels,
+            kernel_size=self.kernel_size,
+            strides=self.strides,
+            padding=self.padding,
+            use_bias=self.use_bias,
+            kernel_init=(
+                self.kernel_init
+                if self.params_dict is None
+                else lambda *_: jnp.array(self.params_dict["conv"]["kernel"])
+            ),
+            bias_init=(
+                self.bias_init
+                if self.params_dict is None
+                else lambda *_: jnp.array(self.params_dict["conv"]["bias"])
+            ),
+            dtype=self.dtype,
+        )(x)
         if self.params_dict is None:
-            x = BatchNorm(epsilon=0.001,
-                          momentum=0.1,
-                          use_running_average=not train,
-                          dtype=self.dtype)(x)
+            x = BatchNorm(
+                epsilon=0.001,
+                momentum=0.1,
+                use_running_average=not train,
+                dtype=self.dtype,
+            )(x)
         else:
-            x = BatchNorm(epsilon=0.001,
-                          momentum=0.1,
-                          bias_init=lambda *_ : jnp.array(self.params_dict['bn']['bias']),
-                          scale_init=lambda *_ : jnp.array(self.params_dict['bn']['scale']),
-                          mean_init=lambda *_ : jnp.array(self.params_dict['bn']['mean']),
-                          var_init=lambda *_ : jnp.array(self.params_dict['bn']['var']),
-                          use_running_average=not train,
-                          dtype=self.dtype)(x)
+            x = BatchNorm(
+                epsilon=0.001,
+                momentum=0.1,
+                bias_init=lambda *_: jnp.array(self.params_dict["bn"]["bias"]),
+                scale_init=lambda *_: jnp.array(self.params_dict["bn"]["scale"]),
+                mean_init=lambda *_: jnp.array(self.params_dict["bn"]["mean"]),
+                var_init=lambda *_: jnp.array(self.params_dict["bn"]["var"]),
+                use_running_average=not train,
+                dtype=self.dtype,
+            )(x)
         x = jax.nn.relu(x)
         return x
 
 
 class InceptionA(nn.Module):
     pool_features: int
-    params_dict: dict=None
-    dtype: str='float32'
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
-        branch1x1 = BasicConv2d(out_channels=64,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch1x1'),
-                                dtype=self.dtype)(x, train)
-        branch5x5 = BasicConv2d(out_channels=48,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch5x5_1'),
-                                dtype=self.dtype)(x, train)
-        branch5x5 = BasicConv2d(out_channels=64,
-                                kernel_size=(5, 5),
-                                padding=((2, 2), (2, 2)),
-                                params_dict=get(self.params_dict, 'branch5x5_2'),
-                                dtype=self.dtype)(branch5x5, train)
+        branch1x1 = BasicConv2d(
+            out_channels=64,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch1x1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch5x5 = BasicConv2d(
+            out_channels=48,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch5x5_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch5x5 = BasicConv2d(
+            out_channels=64,
+            kernel_size=(5, 5),
+            padding=((2, 2), (2, 2)),
+            params_dict=get(self.params_dict, "branch5x5_2"),
+            dtype=self.dtype,
+        )(branch5x5, train)
 
-        branch3x3dbl = BasicConv2d(out_channels=64,
-                                   kernel_size=(1, 1),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_1'),
-                                   dtype=self.dtype)(x, train)
-        branch3x3dbl = BasicConv2d(out_channels=96,
-                                   kernel_size=(3, 3),
-                                   padding=((1, 1), (1, 1)),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_2'),
-                                   dtype=self.dtype)(branch3x3dbl, train)
-        branch3x3dbl = BasicConv2d(out_channels=96,
-                                   kernel_size=(3, 3),
-                                   padding=((1, 1), (1, 1)),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_3'),
-                                   dtype=self.dtype)(branch3x3dbl, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=64,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch3x3dbl_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=96,
+            kernel_size=(3, 3),
+            padding=((1, 1), (1, 1)),
+            params_dict=get(self.params_dict, "branch3x3dbl_2"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=96,
+            kernel_size=(3, 3),
+            padding=((1, 1), (1, 1)),
+            params_dict=get(self.params_dict, "branch3x3dbl_3"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
 
-        branch_pool = avg_pool(x, window_shape=(3, 3), strides=(1, 1), padding=((1, 1), (1, 1)))
-        branch_pool = BasicConv2d(out_channels=self.pool_features,
-                                  kernel_size=(1, 1),
-                                  params_dict=get(self.params_dict, 'branch_pool'),
-                                  dtype=self.dtype)(branch_pool, train)
-        
-        output = jnp.concatenate((branch1x1, branch5x5, branch3x3dbl, branch_pool), axis=-1)
+        branch_pool = avg_pool(
+            x, window_shape=(3, 3), strides=(1, 1), padding=((1, 1), (1, 1))
+        )
+        branch_pool = BasicConv2d(
+            out_channels=self.pool_features,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch_pool"),
+            dtype=self.dtype,
+        )(branch_pool, train)
+
+        output = jnp.concatenate(
+            (branch1x1, branch5x5, branch3x3dbl, branch_pool), axis=-1
+        )
         return output
 
 
 class InceptionB(nn.Module):
-    params_dict: dict=None
-    dtype: str='float32'
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
-        branch3x3 = BasicConv2d(out_channels=384,
-                                kernel_size=(3, 3),
-                                strides=(2, 2),
-                                params_dict=get(self.params_dict, 'branch3x3'),
-                                dtype=self.dtype)(x, train)
+        branch3x3 = BasicConv2d(
+            out_channels=384,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            params_dict=get(self.params_dict, "branch3x3"),
+            dtype=self.dtype,
+        )(x, train)
 
-        branch3x3dbl = BasicConv2d(out_channels=64,
-                                   kernel_size=(1, 1),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_1'),
-                                   dtype=self.dtype)(x, train)
-        branch3x3dbl = BasicConv2d(out_channels=96,
-                                   kernel_size=(3, 3),
-                                   padding=((1, 1), (1, 1)),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_2'),
-                                   dtype=self.dtype)(branch3x3dbl, train)
-        branch3x3dbl = BasicConv2d(out_channels=96,
-                                   kernel_size=(3, 3),
-                                   strides=(2, 2),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_3'),
-                                   dtype=self.dtype)(branch3x3dbl, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=64,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch3x3dbl_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=96,
+            kernel_size=(3, 3),
+            padding=((1, 1), (1, 1)),
+            params_dict=get(self.params_dict, "branch3x3dbl_2"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=96,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            params_dict=get(self.params_dict, "branch3x3dbl_3"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
 
         branch_pool = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2))
 
@@ -343,192 +448,257 @@ class InceptionB(nn.Module):
 
 class InceptionC(nn.Module):
     channels_7x7: int
-    params_dict: dict=None
-    dtype: str='float32'
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
-        branch1x1 = BasicConv2d(out_channels=192,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch1x1'),
-                                dtype=self.dtype)(x, train)
-            
-        branch7x7 = BasicConv2d(out_channels=self.channels_7x7,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch7x7_1'),
-                                dtype=self.dtype)(x, train)
-        branch7x7 = BasicConv2d(out_channels=self.channels_7x7,
-                                kernel_size=(1, 7),
-                                padding=((0, 0), (3, 3)),
-                                params_dict=get(self.params_dict, 'branch7x7_2'),
-                                dtype=self.dtype)(branch7x7, train)
-        branch7x7 = BasicConv2d(out_channels=192,
-                                kernel_size=(7, 1),
-                                padding=((3, 3), (0, 0)),
-                                params_dict=get(self.params_dict, 'branch7x7_3'),
-                                dtype=self.dtype)(branch7x7, train)
+        branch1x1 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch1x1"),
+            dtype=self.dtype,
+        )(x, train)
 
-        branch7x7dbl = BasicConv2d(out_channels=self.channels_7x7,
-                                   kernel_size=(1, 1),
-                                   params_dict=get(self.params_dict, 'branch7x7dbl_1'),
-                                   dtype=self.dtype)(x, train)
-        branch7x7dbl = BasicConv2d(out_channels=self.channels_7x7,
-                                   kernel_size=(7, 1),
-                                   padding=((3, 3), (0, 0)),
-                                   params_dict=get(self.params_dict, 'branch7x7dbl_2'),
-                                   dtype=self.dtype)(branch7x7dbl, train)
-        branch7x7dbl = BasicConv2d(out_channels=self.channels_7x7,
-                                   kernel_size=(1, 7),
-                                   padding=((0, 0), (3, 3)),
-                                   params_dict=get(self.params_dict, 'branch7x7dbl_3'),
-                                   dtype=self.dtype)(branch7x7dbl, train)
-        branch7x7dbl = BasicConv2d(out_channels=self.channels_7x7,
-                                   kernel_size=(7, 1),
-                                   padding=((3, 3), (0, 0)),
-                                   params_dict=get(self.params_dict, 'branch7x7dbl_4'),
-                                   dtype=self.dtype)(branch7x7dbl, train)
-        branch7x7dbl = BasicConv2d(out_channels=self.channels_7x7,
-                                   kernel_size=(1, 7),
-                                   padding=((0, 0), (3, 3)),
-                                   params_dict=get(self.params_dict, 'branch7x7dbl_5'),
-                                   dtype=self.dtype)(branch7x7dbl, train)
+        branch7x7 = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch7x7_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch7x7 = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(1, 7),
+            padding=((0, 0), (3, 3)),
+            params_dict=get(self.params_dict, "branch7x7_2"),
+            dtype=self.dtype,
+        )(branch7x7, train)
+        branch7x7 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(7, 1),
+            padding=((3, 3), (0, 0)),
+            params_dict=get(self.params_dict, "branch7x7_3"),
+            dtype=self.dtype,
+        )(branch7x7, train)
 
-        branch_pool = avg_pool(x, window_shape=(3, 3), strides=(1, 1), padding=((1, 1), (1, 1)))
-        branch_pool = BasicConv2d(out_channels=192,
-                                  kernel_size=(1, 1),
-                                  params_dict=get(self.params_dict, 'branch_pool'),
-                                  dtype=self.dtype)(branch_pool, train)
-        
-        output = jnp.concatenate((branch1x1, branch7x7, branch7x7dbl, branch_pool), axis=-1)
+        branch7x7dbl = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch7x7dbl_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch7x7dbl = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(7, 1),
+            padding=((3, 3), (0, 0)),
+            params_dict=get(self.params_dict, "branch7x7dbl_2"),
+            dtype=self.dtype,
+        )(branch7x7dbl, train)
+        branch7x7dbl = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(1, 7),
+            padding=((0, 0), (3, 3)),
+            params_dict=get(self.params_dict, "branch7x7dbl_3"),
+            dtype=self.dtype,
+        )(branch7x7dbl, train)
+        branch7x7dbl = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(7, 1),
+            padding=((3, 3), (0, 0)),
+            params_dict=get(self.params_dict, "branch7x7dbl_4"),
+            dtype=self.dtype,
+        )(branch7x7dbl, train)
+        branch7x7dbl = BasicConv2d(
+            out_channels=self.channels_7x7,
+            kernel_size=(1, 7),
+            padding=((0, 0), (3, 3)),
+            params_dict=get(self.params_dict, "branch7x7dbl_5"),
+            dtype=self.dtype,
+        )(branch7x7dbl, train)
+
+        branch_pool = avg_pool(
+            x, window_shape=(3, 3), strides=(1, 1), padding=((1, 1), (1, 1))
+        )
+        branch_pool = BasicConv2d(
+            out_channels=192,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch_pool"),
+            dtype=self.dtype,
+        )(branch_pool, train)
+
+        output = jnp.concatenate(
+            (branch1x1, branch7x7, branch7x7dbl, branch_pool), axis=-1
+        )
         return output
 
 
 class InceptionD(nn.Module):
-    params_dict: dict=None
-    dtype: str='float32'
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
-        branch3x3 = BasicConv2d(out_channels=192,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch3x3_1'),
-                                dtype=self.dtype)(x, train)
-        branch3x3 = BasicConv2d(out_channels=320,
-                                kernel_size=(3, 3),
-                                strides=(2, 2),
-                                params_dict=get(self.params_dict, 'branch3x3_2'),
-                                dtype=self.dtype)(branch3x3, train)
-            
-        branch7x7x3 = BasicConv2d(out_channels=192,
-                                  kernel_size=(1, 1),
-                                  params_dict=get(self.params_dict, 'branch7x7x3_1'),
-                                  dtype=self.dtype)(x, train)
-        branch7x7x3 = BasicConv2d(out_channels=192,
-                                  kernel_size=(1, 7),
-                                  padding=((0, 0), (3, 3)),
-                                  params_dict=get(self.params_dict, 'branch7x7x3_2'),
-                                  dtype=self.dtype)(branch7x7x3, train)
-        branch7x7x3 = BasicConv2d(out_channels=192,
-                                  kernel_size=(7, 1),
-                                  padding=((3, 3), (0, 0)),
-                                  params_dict=get(self.params_dict, 'branch7x7x3_3'),
-                                  dtype=self.dtype)(branch7x7x3, train)
-        branch7x7x3 = BasicConv2d(out_channels=192,
-                                  kernel_size=(3, 3),
-                                  strides=(2, 2),
-                                  params_dict=get(self.params_dict, 'branch7x7x3_4'),
-                                  dtype=self.dtype)(branch7x7x3, train)
+        branch3x3 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch3x3_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch3x3 = BasicConv2d(
+            out_channels=320,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            params_dict=get(self.params_dict, "branch3x3_2"),
+            dtype=self.dtype,
+        )(branch3x3, train)
+
+        branch7x7x3 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch7x7x3_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch7x7x3 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(1, 7),
+            padding=((0, 0), (3, 3)),
+            params_dict=get(self.params_dict, "branch7x7x3_2"),
+            dtype=self.dtype,
+        )(branch7x7x3, train)
+        branch7x7x3 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(7, 1),
+            padding=((3, 3), (0, 0)),
+            params_dict=get(self.params_dict, "branch7x7x3_3"),
+            dtype=self.dtype,
+        )(branch7x7x3, train)
+        branch7x7x3 = BasicConv2d(
+            out_channels=192,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            params_dict=get(self.params_dict, "branch7x7x3_4"),
+            dtype=self.dtype,
+        )(branch7x7x3, train)
 
         branch_pool = nn.max_pool(x, window_shape=(3, 3), strides=(2, 2))
-        
+
         output = jnp.concatenate((branch3x3, branch7x7x3, branch_pool), axis=-1)
         return output
 
 
 class InceptionE(nn.Module):
     pooling: Callable
-    params_dict: dict=None
-    dtype: str='float32'
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
-        branch1x1 = BasicConv2d(out_channels=320,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch1x1'),
-                                dtype=self.dtype)(x, train)
-          
-        branch3x3 = BasicConv2d(out_channels=384,
-                                kernel_size=(1, 1),
-                                params_dict=get(self.params_dict, 'branch3x3_1'),
-                                dtype=self.dtype)(x, train)
-        branch3x3_a = BasicConv2d(out_channels=384,
-                                  kernel_size=(1, 3),
-                                  padding=((0, 0), (1, 1)),
-                                  params_dict=get(self.params_dict, 'branch3x3_2a'),
-                                  dtype=self.dtype)(branch3x3, train)
-        branch3x3_b = BasicConv2d(out_channels=384,
-                                  kernel_size=(3, 1),
-                                  padding=((1, 1), (0, 0)),
-                                  params_dict=get(self.params_dict, 'branch3x3_2b'),
-                                  dtype=self.dtype)(branch3x3, train)
+        branch1x1 = BasicConv2d(
+            out_channels=320,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch1x1"),
+            dtype=self.dtype,
+        )(x, train)
+
+        branch3x3 = BasicConv2d(
+            out_channels=384,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch3x3_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch3x3_a = BasicConv2d(
+            out_channels=384,
+            kernel_size=(1, 3),
+            padding=((0, 0), (1, 1)),
+            params_dict=get(self.params_dict, "branch3x3_2a"),
+            dtype=self.dtype,
+        )(branch3x3, train)
+        branch3x3_b = BasicConv2d(
+            out_channels=384,
+            kernel_size=(3, 1),
+            padding=((1, 1), (0, 0)),
+            params_dict=get(self.params_dict, "branch3x3_2b"),
+            dtype=self.dtype,
+        )(branch3x3, train)
         branch3x3 = jnp.concatenate((branch3x3_a, branch3x3_b), axis=-1)
 
-        branch3x3dbl = BasicConv2d(out_channels=448,
-                                   kernel_size=(1, 1),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_1'),
-                                   dtype=self.dtype)(x, train)
-        branch3x3dbl = BasicConv2d(out_channels=384,
-                                   kernel_size=(3, 3),
-                                   padding=((1, 1), (1, 1)),
-                                   params_dict=get(self.params_dict, 'branch3x3dbl_2'),
-                                   dtype=self.dtype)(branch3x3dbl, train)
-        branch3x3dbl_a = BasicConv2d(out_channels=384,
-                                     kernel_size=(1, 3),
-                                     padding=((0, 0), (1, 1)),
-                                     params_dict=get(self.params_dict, 'branch3x3dbl_3a'),
-                                     dtype=self.dtype)(branch3x3dbl, train)
-        branch3x3dbl_b = BasicConv2d(out_channels=384,
-                                     kernel_size=(3, 1),
-                                     padding=((1, 1), (0, 0)),
-                                     params_dict=get(self.params_dict, 'branch3x3dbl_3b'),
-                                     dtype=self.dtype)(branch3x3dbl, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=448,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch3x3dbl_1"),
+            dtype=self.dtype,
+        )(x, train)
+        branch3x3dbl = BasicConv2d(
+            out_channels=384,
+            kernel_size=(3, 3),
+            padding=((1, 1), (1, 1)),
+            params_dict=get(self.params_dict, "branch3x3dbl_2"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
+        branch3x3dbl_a = BasicConv2d(
+            out_channels=384,
+            kernel_size=(1, 3),
+            padding=((0, 0), (1, 1)),
+            params_dict=get(self.params_dict, "branch3x3dbl_3a"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
+        branch3x3dbl_b = BasicConv2d(
+            out_channels=384,
+            kernel_size=(3, 1),
+            padding=((1, 1), (0, 0)),
+            params_dict=get(self.params_dict, "branch3x3dbl_3b"),
+            dtype=self.dtype,
+        )(branch3x3dbl, train)
         branch3x3dbl = jnp.concatenate((branch3x3dbl_a, branch3x3dbl_b), axis=-1)
 
-        branch_pool = self.pooling(x, window_shape=(3, 3), strides=(1, 1), padding=((1, 1), (1, 1)))
-        branch_pool = BasicConv2d(out_channels=192,
-                                  kernel_size=(1, 1),
-                                  params_dict=get(self.params_dict, 'branch_pool'),
-                                  dtype=self.dtype)(branch_pool, train)
-        
-        output = jnp.concatenate((branch1x1, branch3x3, branch3x3dbl, branch_pool), axis=-1)
+        branch_pool = self.pooling(
+            x, window_shape=(3, 3), strides=(1, 1), padding=((1, 1), (1, 1))
+        )
+        branch_pool = BasicConv2d(
+            out_channels=192,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "branch_pool"),
+            dtype=self.dtype,
+        )(branch_pool, train)
+
+        output = jnp.concatenate(
+            (branch1x1, branch3x3, branch3x3dbl, branch_pool), axis=-1
+        )
         return output
 
 
 class InceptionAux(nn.Module):
     num_classes: int
-    kernel_init: functools.partial=nn.initializers.lecun_normal()
-    bias_init: functools.partial=nn.initializers.zeros
-    params_dict: dict=None
-    dtype: str='float32'
+    kernel_init: functools.partial = nn.initializers.lecun_normal()
+    bias_init: functools.partial = nn.initializers.zeros
+    params_dict: dict = None
+    dtype: str = "float32"
 
     @nn.compact
     def __call__(self, x, train=True):
         x = avg_pool(x, window_shape=(5, 5), strides=(3, 3))
-        x = BasicConv2d(out_channels=128,
-                        kernel_size=(1, 1),
-                        params_dict=get(self.params_dict, 'conv0'),
-                        dtype=self.dtype)(x, train)
-        x = BasicConv2d(out_channels=768,
-                        kernel_size=(5, 5),
-                        params_dict=get(self.params_dict, 'conv1'),
-                        dtype=self.dtype)(x, train)
+        x = BasicConv2d(
+            out_channels=128,
+            kernel_size=(1, 1),
+            params_dict=get(self.params_dict, "conv0"),
+            dtype=self.dtype,
+        )(x, train)
+        x = BasicConv2d(
+            out_channels=768,
+            kernel_size=(5, 5),
+            params_dict=get(self.params_dict, "conv1"),
+            dtype=self.dtype,
+        )(x, train)
         x = jnp.mean(x, axis=(1, 2))
         x = jnp.reshape(x, newshape=(x.shape[0], -1))
-        x = Dense(features=self.num_classes,
-                  params_dict=get(self.params_dict, 'fc'),
-                  dtype=self.dtype)(x)
+        x = Dense(
+            features=self.num_classes,
+            params_dict=get(self.params_dict, "fc"),
+            dtype=self.dtype,
+        )(x)
         return x
-    
+
+
 def _absolute_dims(rank, dims):
     return tuple([rank + dim if dim < 0 else dim for dim in dims])
 
@@ -551,7 +721,8 @@ class BatchNorm(nn.Module):
     @nn.compact
     def __call__(self, x, use_running_average: Optional[bool] = None):
         use_running_average = merge_param(
-            'use_running_average', self.use_running_average, use_running_average)
+            "use_running_average", self.use_running_average, use_running_average
+        )
         x = jnp.asarray(x, jnp.float32)
         axis = self.axis if isinstance(self.axis, tuple) else (self.axis,)
         axis = _absolute_dims(x.ndim, axis)
@@ -560,14 +731,14 @@ class BatchNorm(nn.Module):
         reduction_axis = tuple(i for i in range(x.ndim) if i not in axis)
 
         # see NOTE above on initialization behavior
-        initializing = self.is_mutable_collection('params')
+        initializing = self.is_mutable_collection("params")
 
-        ra_mean = self.variable('batch_stats', 'mean',
-                                self.mean_init,
-                                reduced_feature_shape)
-        ra_var = self.variable('batch_stats', 'var',
-                               self.var_init,
-                               reduced_feature_shape)
+        ra_mean = self.variable(
+            "batch_stats", "mean", self.mean_init, reduced_feature_shape
+        )
+        ra_var = self.variable(
+            "batch_stats", "var", self.var_init, reduced_feature_shape
+        )
 
         if use_running_average:
             mean, var = ra_mean.value, ra_var.value
@@ -580,33 +751,37 @@ class BatchNorm(nn.Module):
                     lax.pmean(
                         concatenated_mean,
                         axis_name=self.axis_name,
-                        axis_index_groups=self.axis_index_groups), 2)
+                        axis_index_groups=self.axis_index_groups,
+                    ),
+                    2,
+                )
             var = mean2 - lax.square(mean)
 
             if not initializing:
-                ra_mean.value = self.momentum * ra_mean.value + (1 - self.momentum) * mean
+                ra_mean.value = (
+                    self.momentum * ra_mean.value + (1 - self.momentum) * mean
+                )
                 ra_var.value = self.momentum * ra_var.value + (1 - self.momentum) * var
 
         y = x - mean.reshape(feature_shape)
         mul = lax.rsqrt(var + self.epsilon)
         if self.use_scale:
-            scale = self.param('scale',
-                               self.scale_init,
-                               reduced_feature_shape).reshape(feature_shape)
+            scale = self.param("scale", self.scale_init, reduced_feature_shape).reshape(
+                feature_shape
+            )
             mul = mul * scale
         y = y * mul
         if self.use_bias:
-            bias = self.param('bias',
-                              self.bias_init,
-                              reduced_feature_shape).reshape(feature_shape)
+            bias = self.param("bias", self.bias_init, reduced_feature_shape).reshape(
+                feature_shape
+            )
             y = y + bias
         return jnp.asarray(y, self.dtype)
 
 
 def pool(inputs, init, reduce_fn, window_shape, strides, padding):
     strides = strides or (1,) * len(window_shape)
-    assert len(window_shape) == len(strides), (
-        f"len({window_shape}) == len({strides})")
+    assert len(window_shape) == len(strides), f"len({window_shape}) == len({strides})"
     strides = (1,) + strides + (1,)
     dims = (1,) + window_shape + (1,)
 
@@ -620,29 +795,33 @@ def pool(inputs, init, reduce_fn, window_shape, strides, padding):
     assert inputs.ndim == len(dims), f"len({inputs.shape}) != len({dims})"
     if not isinstance(padding, str):
         padding = tuple(map(tuple, padding))
-        assert(len(padding) == len(window_shape)), (
+        assert len(padding) == len(window_shape), (
             f"padding {padding} must specify pads for same number of dims as "
-            f"window_shape {window_shape}")
-        assert(all([len(x) == 2 for x in padding])), (
-            f"each entry in padding {padding} must be length 2")
-        padding = ((0,0),) + padding + ((0,0),)
+            f"window_shape {window_shape}"
+        )
+        assert all(
+            [len(x) == 2 for x in padding]
+        ), f"each entry in padding {padding} must be length 2"
+        padding = ((0, 0),) + padding + ((0, 0),)
     y = jax.lax.reduce_window(inputs, init, reduce_fn, dims, strides, padding)
     if is_single_input:
         y = jnp.squeeze(y, axis=0)
     return y
 
 
-def avg_pool(inputs, window_shape, strides=None, padding='VALID'):
+def avg_pool(inputs, window_shape, strides=None, padding="VALID"):
     assert inputs.ndim == 4
     assert len(window_shape) == 2
 
-    y = pool(inputs, 0., jax.lax.add, window_shape, strides, padding)
+    y = pool(inputs, 0.0, jax.lax.add, window_shape, strides, padding)
     ones = jnp.ones(shape=(1, inputs.shape[1], inputs.shape[2], 1)).astype(inputs.dtype)
-    counts = jax.lax.conv_general_dilated(ones,
-                                          jnp.expand_dims(jnp.ones(window_shape).astype(inputs.dtype), axis=(-2, -1)),
-                                          window_strides=(1, 1),
-                                          padding=((1, 1), (1, 1)),
-                                          dimension_numbers=nn.linear._conv_dimension_numbers(ones.shape),
-                                          feature_group_count=1)
-    y = y / counts 
+    counts = jax.lax.conv_general_dilated(
+        ones,
+        jnp.expand_dims(jnp.ones(window_shape).astype(inputs.dtype), axis=(-2, -1)),
+        window_strides=(1, 1),
+        padding=((1, 1), (1, 1)),
+        dimension_numbers=nn.linear._conv_dimension_numbers(ones.shape),
+        feature_group_count=1,
+    )
+    y = y / counts
     return y

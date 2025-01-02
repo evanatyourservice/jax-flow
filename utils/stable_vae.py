@@ -1,4 +1,3 @@
-
 from functools import partial, cached_property
 
 import jax
@@ -9,7 +8,9 @@ from flax import struct
 from jaxtyping import Array, PyTree, Key, Float, Shaped, Int, UInt8, jaxtyped
 from typeguard import typechecked
 from functools import partial
+
 typecheck = partial(jaxtyped, typechecker=typechecked)
+
 
 @struct.dataclass
 class StableVAE:
@@ -21,14 +22,9 @@ class StableVAE:
         # module, params = FlaxAutoencoderKL.from_pretrained(
         #     "stabilityai/stable-diffusion-xl-base-1.0", subfolder="vae"
         # )
-        module, params = FlaxAutoencoderKL.from_pretrained(
-            "pcuenq/sd-vae-ft-mse-flax"
-        )
+        module, params = FlaxAutoencoderKL.from_pretrained("pcuenq/sd-vae-ft-mse-flax")
         params = jax.device_get(params)
-        return cls(
-            params=params,
-            module=module,
-        )
+        return cls(params=params, module=module)
 
     @partial(jax.jit, static_argnames="scale")
     def encode(

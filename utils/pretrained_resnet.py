@@ -19,23 +19,32 @@ _DEFAULT_RESNET_PATH = None
 RESNET_IMG_SIZE = 224
 VALID_MODELS = ["resnet50"]
 
+
 @flax.struct.dataclass
 class ModelState:
     params: flax.core.FrozenDict
     batch_stats: flax.core.FrozenDict
 
+
 class ObjectFromDict(object):
     def __init__(self, d):
         for a, b in d.items():
             if isinstance(b, (list, tuple)):
-                setattr(self, a,[ObjectFromDict(x) if isinstance(x, dict) else x for x in b])
+                setattr(
+                    self,
+                    a,
+                    [ObjectFromDict(x) if isinstance(x, dict) else x for x in b],
+                )
             else:
                 setattr(self, a, ObjectFromDict(b) if isinstance(b, dict) else b)
 
 
-def create_train_state(config: ml_collections.ConfigDict, rng: np.ndarray,
-                       input_shape: Sequence[int],
-                       num_classes: int) -> Tuple[nn.Module, ModelState]:
+def create_train_state(
+    config: ml_collections.ConfigDict,
+    rng: np.ndarray,
+    input_shape: Sequence[int],
+    num_classes: int,
+) -> Tuple[nn.Module, ModelState]:
     """Create and initialize the model.
 
     Args:
@@ -60,8 +69,7 @@ def create_train_state(config: ml_collections.ConfigDict, rng: np.ndarray,
 
 
 def get_pretrained_model(
-    model_name: str = "resnet50",
-    checkpoint_path: Optional[str] = _DEFAULT_RESNET_PATH
+    model_name: str = "resnet50", checkpoint_path: Optional[str] = _DEFAULT_RESNET_PATH
 ) -> Tuple[nn.Module, ModelState]:
     """Returns a pretrained model loaded from weights in checkpoint_dir.
 
@@ -86,7 +94,8 @@ def get_pretrained_model(
         config,
         model_rng,
         input_shape=(1, RESNET_IMG_SIZE, RESNET_IMG_SIZE, 3),
-        num_classes=1000)
+        num_classes=1000,
+    )
 
     if checkpoint_path is not None:
         # Set up checkpointing of the model and the input pipeline.'
@@ -95,12 +104,14 @@ def get_pretrained_model(
             checkpoint_data = np.load(f, allow_pickle=True).item()
             state = ModelState(
                 params=checkpoint_data["params"],
-                batch_stats=checkpoint_data["batch_stats"])
+                batch_stats=checkpoint_data["batch_stats"],
+            )
     return model, state
 
 
-def get_pretrained_embs(state: ModelState, model: nn.Module,
-                        images: jnp.ndarray) -> Tuple[jnp.ndarray, jnp.ndarray]:
+def get_pretrained_embs(
+    state: ModelState, model: nn.Module, images: jnp.ndarray
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Extract embeddings from a pretrained model.
 
     Args:
@@ -119,7 +130,8 @@ def get_pretrained_embs(state: ModelState, model: nn.Module,
         images = jax.image.resize(
             images,
             (images.shape[0], RESNET_IMG_SIZE, RESNET_IMG_SIZE, images.shape[3]),
-            "bilinear")
+            "bilinear",
+        )
     variables = {"params": state.params, "batch_stats": state.batch_stats}
     pool, outputs = model.apply(variables, images, mutable=False, train=False)
     return pool, outputs
@@ -154,9 +166,9 @@ class ResNetBlock(nn.Module):
         x = self.norm(scale_init=nn.initializers.zeros, name="bn2")(x)
 
         if residual.shape != x.shape:
-            residual = Conv1x1(
-                self.filters, strides=self.strides, name="proj_conv")(
-                    residual)
+            residual = Conv1x1(self.filters, strides=self.strides, name="proj_conv")(
+                residual
+            )
             residual = self.norm(name="proj_bn")(residual)
 
         x = nn.relu(residual + x)
@@ -184,8 +196,8 @@ class BottleneckResNetBlock(ResNetBlock):
 
         if residual.shape != x.shape:
             residual = Conv1x1(
-                4 * self.filters, strides=self.strides, name="proj_conv")(
-                    residual)
+                4 * self.filters, strides=self.strides, name="proj_conv"
+            )(residual)
             residual = self.norm(name="proj_bn")(residual)
 
         x = nn.relu(residual + x)
@@ -208,7 +220,8 @@ class ResNetStage(nn.Module):
                 filters=self.filters,
                 norm=self.norm,
                 strides=self.first_block_strides if i == 0 else (1, 1),
-                name=f"block{i + 1}")(x)
+                name=f"block{i + 1}",
+            )(x)
         return x
 
 
@@ -226,6 +239,7 @@ class ResNet(nn.Module):
         is the number of filters in the first stage, every consecutive stage
         doubles the number of filters.
     """
+
     num_classes: int
     block_cls: Type[ResNetBlock]
     stage_sizes: List[int]
@@ -245,7 +259,8 @@ class ResNet(nn.Module):
         """
         width = 64 * self.width_factor
         norm = functools.partial(
-            nn.BatchNorm, use_running_average=not train, momentum=0.9)
+            nn.BatchNorm, use_running_average=not train, momentum=0.9
+        )
 
         # Root block
         x = nn.Conv(
@@ -253,8 +268,8 @@ class ResNet(nn.Module):
             kernel_size=(7, 7),
             strides=(2, 2),
             use_bias=False,
-            name="init_conv")(
-                x)
+            name="init_conv",
+        )(x)
         x = norm(name="init_bn")(x)
         x = nn.max_pool(x, (3, 3), strides=(2, 2), padding="SAME")
 
@@ -266,26 +281,29 @@ class ResNet(nn.Module):
                 block_cls=self.block_cls,
                 norm=norm,
                 first_block_strides=(1, 1) if i == 0 else (2, 2),
-                name=f"stage{i + 1}")(
-                    x)
+                name=f"stage{i + 1}",
+            )(x)
 
         # Head
         pool = x
         out = jnp.mean(pool, axis=(1, 2))
         out = nn.Dense(
-            self.num_classes, kernel_init=nn.initializers.zeros, name="head")(out)
+            self.num_classes, kernel_init=nn.initializers.zeros, name="head"
+        )(out)
         return pool, out
 
 
-ResNet18 = functools.partial(
-    ResNet, stage_sizes=[2, 2, 2, 2], block_cls=ResNetBlock)
-ResNet34 = functools.partial(
-    ResNet, stage_sizes=[3, 4, 6, 3], block_cls=ResNetBlock)
+ResNet18 = functools.partial(ResNet, stage_sizes=[2, 2, 2, 2], block_cls=ResNetBlock)
+ResNet34 = functools.partial(ResNet, stage_sizes=[3, 4, 6, 3], block_cls=ResNetBlock)
 ResNet50 = functools.partial(
-    ResNet, stage_sizes=[3, 4, 6, 3], block_cls=BottleneckResNetBlock)
+    ResNet, stage_sizes=[3, 4, 6, 3], block_cls=BottleneckResNetBlock
+)
 ResNet101 = functools.partial(
-    ResNet, stage_sizes=[3, 4, 23, 3], block_cls=BottleneckResNetBlock)
+    ResNet, stage_sizes=[3, 4, 23, 3], block_cls=BottleneckResNetBlock
+)
 ResNet152 = functools.partial(
-    ResNet, stage_sizes=[3, 8, 36, 3], block_cls=BottleneckResNetBlock)
+    ResNet, stage_sizes=[3, 8, 36, 3], block_cls=BottleneckResNetBlock
+)
 ResNet200 = functools.partial(
-    ResNet, stage_sizes=[3, 24, 36, 3], block_cls=BottleneckResNetBlock)
+    ResNet, stage_sizes=[3, 24, 36, 3], block_cls=BottleneckResNetBlock
+)

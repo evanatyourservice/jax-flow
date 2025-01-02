@@ -1,0 +1,16 @@
+absl-py
+flax
+jax
+jaxlib
+matplotlib
+ml_collections
+numpy
+optax
+requests
+scipy
+tensorflow
+tensorflow-datasets
+tqdm
+wandb
+psgd-jax
+soap-jax @ git+https://github.com/haydn-jones/SOAP_JAX
