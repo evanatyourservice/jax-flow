@@ -96,6 +96,13 @@ preset_configs = {
         "num_heads": 8,
         "mlp_ratio": 3,
     },
+    "medium": {
+        "hidden_size": 768,
+        "patch_size": 2,
+        "depth": 16,
+        "num_heads": 12,
+        "mlp_ratio": 3,
+    },
     "semilarge": {  # local-batch of 32 achieved, (16 with eps)
         "hidden_size": 1024,
         "patch_size": 2,
