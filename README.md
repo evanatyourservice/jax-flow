@@ -2,6 +2,8 @@
 
 Started with this repo: https://github.com/kvfrans/jax-flow
 
+First install requirements, then create fid target by running `python utils/prepare_fid.py`.
+
 
 Implementation of flow-matching models in JAX [1] [2]. These are basically diffusion models, and we base the backbone off of the Diffusion Transformer (DiT) model. See [here for DiT implemenation](https://github.com/kvfrans/jax-diffusion-transformer).
 
