@@ -20,7 +20,7 @@ tf.config.set_visible_devices([], "TPU")
 
 from psgd_jax.kron import kron
 from psgd_jax import precond_update_prob_schedule
-from soap_jax import soap
+from soap_jax.soap import scale_by_soap
 
 from utils.wandb import setup_wandb, default_wandb_config
 from utils.train_state import TrainState, target_update
@@ -426,12 +426,16 @@ def main(_):
             scanned_layers=scanned_layers,
         )
     elif FLAGS.model["optimizer"] == "soap":
-        tx = soap(
-            learning_rate=lr_schedule,
-            b1=FLAGS.model["beta1"],
-            b2=FLAGS.model["beta2"],
-            weight_decay=FLAGS.model["weight_decay"],
-            precondition_frequency=20,
+        tx = optax.chain(
+            scale_by_soap(
+                b1=FLAGS.model["beta1"],
+                b2=FLAGS.model["beta2"],
+                precondition_frequency=20,
+            ),
+            # exploding gradients so clipping updates like kron instead of grad clipping
+            optax.clip_by_block_rms(1.1),
+            optax.add_decayed_weights(FLAGS.model["weight_decay"]),
+            optax.scale_by_learning_rate(lr_schedule),
         )
     else:
         raise ValueError(f"Unknown optimizer: {FLAGS.model['optimizer']}")
