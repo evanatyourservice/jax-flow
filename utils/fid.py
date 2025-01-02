@@ -26,15 +26,8 @@ Dtype = Any
 #######################################
 
 
-def get_fid_network(transform_input=True):
-    """
-    Returns a function with input of images in range [-1, 1], and output of 2048-length activations.
-
-    Args:
-        transform_input (bool): If True, preprocesses the input according to the method with which it
-                                was trained on ImageNet.
-    """
-    model = InceptionV3(pretrained=True, transform_input=transform_input)
+def get_fid_network():
+    model = InceptionV3(pretrained=True)
     rng = jax.random.PRNGKey(0)
     params = model.init(rng, jnp.ones((1, 299, 299, 3)))
     params = flax.jax_utils.replicate(params, devices=jax.local_devices())
@@ -139,7 +132,7 @@ class InceptionV3(nn.Module):
             train (bool): If True, training mode.
             rng (jax.random.PRNGKey): Random seed.
         """
-        x = self._transform_input(x)
+        # x = self._transform_input(x)
         x = BasicConv2d(
             out_channels=32,
             kernel_size=(3, 3),

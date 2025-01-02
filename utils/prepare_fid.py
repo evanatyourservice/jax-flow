@@ -1,3 +1,4 @@
+import random
 import jax
 import jax.numpy as jnp
 import tensorflow as tf
@@ -43,12 +44,13 @@ def load_and_preprocess_image(example):
         return tf.zeros([299, 299, 3], dtype=tf.float32)
 
 
-def calculate_target_stats(dataset_path, batch_size=64):
+def calculate_target_stats(dataset_path, batch_size=64, max_samples=None):
     print("Loading validation dataset...")
     val_pattern = f"{dataset_path}/val/images_*.tfrecord"
     val_files = tf.io.gfile.glob(val_pattern)
+    random.shuffle(val_files)
 
-    dataset = tf.data.TFRecordDataset(val_files)
+    dataset = tf.data.TFRecordDataset(val_files, num_parallel_reads=16)
     feature_description = {
         "image": tf.io.FixedLenFeature([], tf.string),
         "label": tf.io.FixedLenFeature([], tf.int64),
@@ -59,25 +61,35 @@ def calculate_target_stats(dataset_path, batch_size=64):
     def parse_tfrecord(example_proto):
         return tf.io.parse_single_example(example_proto, feature_description)
 
-    dataset = dataset.map(parse_tfrecord)
-    dataset = dataset.map(lambda x: load_and_preprocess_image(x))
+    dataset = dataset.map(parse_tfrecord, num_parallel_calls=16)
+    dataset = dataset.map(lambda x: load_and_preprocess_image(x), num_parallel_calls=16)
     dataset = dataset.filter(lambda x: x is not None)  # Remove failed images
-    dataset = dataset.batch(batch_size, drop_remainder=True)
+    dataset = dataset.shuffle(buffer_size=10000)
+    dataset = dataset.batch(batch_size, drop_remainder=True, num_parallel_calls=16)
 
     print("Getting Inception network...")
     inception_fn = get_fid_network()
 
     print("Calculating activation statistics...")
     all_activations = []
+    total_samples = 0
+
     for batch in tqdm(dataset):
-        # Convert to numpy and then device array
         batch_np = jnp.array(batch.numpy())
-        # Split batch for multi-GPU if needed
         batch_np = batch_np.reshape((jax.device_count(), -1) + batch_np.shape[1:])
         activations = inception_fn(batch_np)
         all_activations.append(jnp.reshape(activations, (-1, activations.shape[-1])))
+        
+        total_samples += batch.shape[0]
+        if max_samples and total_samples >= max_samples:
+            break
 
     all_activations = jnp.concatenate(all_activations, axis=0)
+    
+    # Slice to exact number of samples if we collected more than needed
+    if max_samples:
+        all_activations = all_activations[:max_samples]
+
     mu = jnp.mean(all_activations, axis=0)
     sigma = jnp.cov(all_activations, rowvar=False)
 
@@ -97,6 +109,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset-path", type=str, default="gs://diffdata/imagenet")
     parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=4096,
+        help="Maximum number of samples to use for statistics calculation",
+    )
     args = parser.parse_args()
 
-    calculate_target_stats(args.dataset_path, args.batch_size)
+    calculate_target_stats(args.dataset_path, args.batch_size, args.max_samples)

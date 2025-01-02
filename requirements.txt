@@ -12,5 +12,8 @@ tensorflow
 tensorflow-datasets
 tqdm
 wandb
+diffusers
+einops
+typeguard
 psgd-jax
 soap-jax @ git+https://github.com/haydn-jones/SOAP_JAX
