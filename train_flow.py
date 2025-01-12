@@ -330,8 +330,8 @@ def main(_):
         filenames = tf.io.gfile.glob(file_pattern)
         if not filenames:
             raise ValueError(f"No TFRecord files found at {file_pattern}")
-        filenames = filenames[jax.process_index() : jax.process_index() + 1]
-        print(f"First file for {split} split: {filenames[0]}")
+        filenames = filenames[jax.process_index()::jax.process_count()]
+        print(f"Process {jax.process_index()}: Using {len(filenames)} files from {split} split")
         dataset = tf.data.TFRecordDataset(
             filenames, num_parallel_reads=16 if is_train else 4
         )
