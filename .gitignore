@@ -1,2 +1,4 @@
 .DS_Store
 __pycache__
+data/inception_v3_weights_fid.pickle
+data/imagenet_stats.npz

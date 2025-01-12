@@ -37,7 +37,9 @@ flags.DEFINE_string(
 )
 flags.DEFINE_string("load_dir", None, "Logging dir (if not None, save params).")
 flags.DEFINE_string("save_dir", None, "Logging dir (if not None, save params).")
-flags.DEFINE_string("fid_stats", "data/imagenet_stats.npz", "FID stats file.")
+flags.DEFINE_string(
+    "fid_stats", "gs://diffdata/imagenet_stats.npz", "FID stats file. Set to None to disable FID calculation."
+)
 flags.DEFINE_integer("seed", 42, "Random seed.")
 flags.DEFINE_integer("log_interval", 200, "Logging interval.")
 flags.DEFINE_integer("eval_interval", 5000, "Eval interval.")
@@ -48,6 +50,7 @@ flags.DEFINE_integer("max_steps", int(1_000_000), "Number of training steps.")
 flags.DEFINE_string(
     "gs_data_path", "gs://diffdata/imagenet", "Base GCS path for TFRecord files."
 )
+flags.DEFINE_integer("fid_samples", 10000, "Number of samples to use for FID calculation.")
 model_config = ml_collections.ConfigDict(
     {
         # Make sure to run with Large configs when we actually want to run!
@@ -456,7 +459,11 @@ def main(_):
         from utils.fid import get_fid_network, fid_from_stats
 
         get_fid_activations = get_fid_network()
-        truth_fid_stats = np.load(FLAGS.fid_stats)
+        if FLAGS.fid_stats.startswith("gs://"):
+            with tf.io.gfile.GFile(FLAGS.fid_stats, 'rb') as f:
+                truth_fid_stats = np.load(f)
+        else:
+            truth_fid_stats = np.load(FLAGS.fid_stats)
 
     model = flax.jax_utils.replicate(model, devices=jax.local_devices())
     model = model.replace(rng=jax.random.split(rng, len(jax.local_devices())))
@@ -615,7 +622,9 @@ def main(_):
         if FLAGS.fid_stats is not None:
             activations = []
             valid_images_shape = valid_images.shape
-            for fid_it in range(4096 // FLAGS.batch_size):
+            num_batches = int(np.ceil(FLAGS.fid_samples / FLAGS.batch_size))
+
+            for fid_it in range(num_batches):
                 _, valid_labels = next(dataset_valid)
 
                 key = jax.random.PRNGKey(42 + fid_it)
@@ -654,13 +663,17 @@ def main(_):
                 activations.append(acts)
             if jax.process_index() == 0:
                 activations = np.concatenate(activations, axis=0)
+                # Cut off any extra samples beyond what was requested
+                activations = activations[:FLAGS.fid_samples]
                 activations = activations.reshape((-1, activations.shape[-1]))
                 mu1 = np.mean(activations, axis=0)
                 sigma1 = np.cov(activations, rowvar=False)
                 fid = fid_from_stats(
                     mu1, sigma1, truth_fid_stats["mu"], truth_fid_stats["sigma"]
                 )
-                wandb.log({"fid": fid}, step=i)
+                wandb.log({
+                    "fid": fid,
+                }, step=i)
 
         del valid_images, valid_labels
         del all_x, x, x_t, eps

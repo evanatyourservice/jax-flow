@@ -5,6 +5,8 @@ import tensorflow as tf
 from tqdm import tqdm
 from fid import get_fid_network
 import numpy as np
+import tempfile
+import os
 
 
 def load_and_preprocess_image(example):
@@ -44,11 +46,14 @@ def load_and_preprocess_image(example):
         return tf.zeros([299, 299, 3], dtype=tf.float32)
 
 
-def calculate_target_stats(dataset_path, batch_size=64, max_samples=None):
+def calculate_target_stats(
+    dataset_path, batch_size=64, max_samples=None, output_path="data/imagenet_stats.npz"
+):
     print("Loading validation dataset...")
     val_pattern = f"{dataset_path}/val/images_*.tfrecord"
     val_files = tf.io.gfile.glob(val_pattern)
     random.shuffle(val_files)
+    print(f"Found {len(val_files)} validation files")
 
     dataset = tf.data.TFRecordDataset(val_files, num_parallel_reads=16)
     feature_description = {
@@ -79,14 +84,13 @@ def calculate_target_stats(dataset_path, batch_size=64, max_samples=None):
         batch_np = batch_np.reshape((jax.device_count(), -1) + batch_np.shape[1:])
         activations = inception_fn(batch_np)
         all_activations.append(jnp.reshape(activations, (-1, activations.shape[-1])))
-        
+
         total_samples += batch.shape[0]
         if max_samples and total_samples >= max_samples:
             break
 
     all_activations = jnp.concatenate(all_activations, axis=0)
-    
-    # Slice to exact number of samples if we collected more than needed
+
     if max_samples:
         all_activations = all_activations[:max_samples]
 
@@ -96,10 +100,17 @@ def calculate_target_stats(dataset_path, batch_size=64, max_samples=None):
     print(f"Calculated stats from {len(all_activations)} images")
     print(f"Mean shape: {mu.shape}, Covariance shape: {sigma.shape}")
 
-    # Save the statistics as npz instead of pickle
-    np.savez("data/imagenet_stats.npz", mu=np.array(mu), sigma=np.array(sigma))
+    stats_data = {"mu": np.array(mu), "sigma": np.array(sigma)}
 
-    print("✅ Saved target statistics to data/imagenet_stats.npz")
+    if output_path.startswith("gs://"):
+        local_path = "data/imagenet_stats.npz"
+        np.savez(local_path, **stats_data)
+        tf.io.gfile.copy(local_path, output_path, overwrite=True)
+        print(f"✅ Copied statistics to GCS: {output_path}")
+    else:
+        np.savez(output_path, **stats_data)
+        print(f"✅ Saved target statistics to {output_path}")
+
     return mu, sigma
 
 
@@ -112,9 +123,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max-samples",
         type=int,
-        default=4096,
+        default=10000,
         help="Maximum number of samples to use for statistics calculation",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=str,
+        default="gs://diffdata/imagenet_stats.npz",
+        help="Path to save the statistics (can be local or gs:// bucket path)",
     )
     args = parser.parse_args()
 
-    calculate_target_stats(args.dataset_path, args.batch_size, args.max_samples)
+    calculate_target_stats(
+        args.dataset_path, args.batch_size, args.max_samples, args.output_path
+    )
