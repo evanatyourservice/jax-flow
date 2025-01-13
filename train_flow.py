@@ -624,7 +624,11 @@ def main(_):
             valid_images_shape = valid_images.shape
             num_batches = int(np.ceil(FLAGS.fid_samples / FLAGS.batch_size))
 
-            for fid_it in range(num_batches):
+            for fid_it in tqdm.tqdm(
+                range(num_batches), 
+                desc="Calculating FID", 
+                disable=jax.process_index() != 0
+            ):
                 _, valid_labels = next(dataset_valid)
 
                 key = jax.random.PRNGKey(42 + fid_it)
